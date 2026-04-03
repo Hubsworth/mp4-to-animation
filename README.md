@@ -26,9 +26,9 @@
 - 🔒 **Privacy First**: 100% client-side processing using WebAssembly (FFmpeg.wasm). Your videos never leave your machine.
 - 🎨 **Premium UI**: Modern glassmorphism design with fluid animations (Framer Motion) and real-time conversion feedback.
 - 🛠️ **Custom Presets**:
-    - **Precision**: Multi-pass high-quality encoding.
+    - **High**: Multi-pass high-quality encoding.
     - **Balanced**: Optimal size vs. quality (Bayer dithering).
-    - **Fast**: Quick conversion for drafts.
+    - **Low**: Quick conversion for drafts.
 - 📉 **Optimized Output**: Automatic palette optimization to keep file sizes manageable while maintaining visual depth.
 
 ---

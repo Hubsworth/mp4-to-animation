@@ -34,7 +34,7 @@ function App() {
   // Settings
   const [fps, setFps] = useState(15);
   const [width, setScaleWidth] = useState(480);
-  const [quality, setQuality] = useState('balanced'); // high (HD), balanced, fast
+  const [quality, setQuality] = useState('balanced'); // high (HD), balanced, low
 
   useEffect(() => {
     load();
@@ -432,7 +432,7 @@ function App() {
                           fontWeight: quality === 'high' ? 600 : 400
                         }}
                       >
-                         Precision
+                         High
                       </button>
                       <button 
                         onClick={() => setQuality('balanced')}
@@ -451,20 +451,20 @@ function App() {
                          Balanced
                       </button>
                       <button 
-                        onClick={() => setQuality('fast')}
+                        onClick={() => setQuality('low')}
                         style={{ 
                           padding: '10px 4px', 
                           borderRadius: '8px', 
                           border: '1px solid', 
-                          borderColor: quality === 'fast' ? 'var(--primary)' : 'var(--border)',
-                          background: quality === 'fast' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
-                          color: quality === 'fast' ? 'white' : 'var(--text-muted)',
+                          borderColor: quality === 'low' ? 'var(--primary)' : 'var(--border)',
+                          background: quality === 'low' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                          color: quality === 'low' ? 'white' : 'var(--text-muted)',
                           fontSize: '0.75rem',
                           cursor: 'pointer',
-                          fontWeight: quality === 'fast' ? 600 : 400
+                          fontWeight: quality === 'low' ? 600 : 400
                         }}
                       >
-                         Fast
+                         Low
                       </button>
                     </div>
                   </div>
