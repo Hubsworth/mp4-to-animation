@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useFFmpeg } from './hooks/useFFmpeg';
 import { fetchFile } from '@ffmpeg/util';
 import { 
@@ -9,17 +9,26 @@ import {
   Loader2, 
   Play, 
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Files,
+  X,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+interface ConversionResult {
+  url: string;
+  name: string;
+  type: 'gif' | 'webp';
+}
+
 function App() {
-  const { load, loaded, ffmpeg, progress, logs, setProgress } = useFFmpeg();
-  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const { load, loaded, ffmpeg, progress, setProgress } = useFFmpeg();
+  const [videoFiles, setVideoFiles] = useState<File[]>([]);
   const [outputType, setOutputType] = useState<'gif' | 'webp'>('gif');
-  const [resultUrl, setResultUrl] = useState<string | null>(null);
-  const [outputFileName, setOutputFileName] = useState('');
+  const [results, setResults] = useState<ConversionResult[]>([]);
   const [isConverting, setIsConverting] = useState(false);
+  const [currentProcessingIndex, setCurrentProcessingIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   
   // Settings
@@ -27,118 +36,128 @@ function App() {
   const [width, setScaleWidth] = useState(480);
   const [quality, setQuality] = useState('balanced'); // high (HD), balanced, fast
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-
   useEffect(() => {
-    // Load FFmpeg on mount
     load();
   }, [load]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setVideoFile(file);
-      setResultUrl(null);
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setVideoFiles(prev => [...prev, ...files]);
       setError(null);
-      // Prepare output filename
-      const baseName = file.name.replace(/\.[^/.]+$/, "");
-      setOutputFileName(`${baseName}.${outputType}`);
+      // Reset input value to allow selecting same files again if needed
+      e.target.value = '';
     }
   };
 
-  // Sync filename when output type changes
-  useEffect(() => {
-    if (videoFile) {
-      const baseName = videoFile.name.replace(/\.[^/.]+$/, "");
-      setOutputFileName(`${baseName}.${outputType}`);
+  const removeFile = (index: number) => {
+    setVideoFiles(prev => prev.filter((_, i) => i !== index));
+    if (videoFiles.length === 1) {
+      setResults([]);
     }
-  }, [outputType, videoFile]);
+  };
 
-  const convertToOutput = async () => {
-    if (!videoFile || !ffmpeg) return;
+  const clearAll = () => {
+    setVideoFiles([]);
+    setResults([]);
+    setError(null);
+  };
+
+  const convertBatch = async () => {
+    if (videoFiles.length === 0 || !ffmpeg) return;
 
     setIsConverting(true);
-    setProgress(0);
+    setResults([]);
     setError(null);
 
-    const inputName = 'input.mp4';
-    const outputName = outputType === 'gif' ? 'output.gif' : 'output.webp';
-    const paletteName = 'palette.png';
-
     try {
-      // Write file to FFmpeg FS
-      await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
+      for (let i = 0; i < videoFiles.length; i++) {
+        setCurrentProcessingIndex(i);
+        setProgress(0);
+        
+        const file = videoFiles[i];
+        const inputName = `input_${i}.mp4`;
+        const outputSuffix = outputType === 'gif' ? 'gif' : 'webp';
+        const outputName = `output_${i}.${outputSuffix}`;
+        const paletteName = `palette_${i}.png`;
+        const finalFileName = `${file.name.replace(/\.[^/.]+$/, "")}.${outputSuffix}`;
 
-      if (outputType === 'gif') {
-        if (quality === 'high') {
-          await ffmpeg.exec([
-            '-i', inputName,
-            '-vf', `fps=${fps},scale=${width}:-1:flags=lanczos,palettegen=stats_mode=full`,
-            '-y', paletteName
-          ]);
-          await ffmpeg.exec([
-            '-i', inputName,
-            '-i', paletteName,
-            '-filter_complex', `fps=${fps},scale=${width}:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle`,
-            '-y', outputName
-          ]);
-        } else if (quality === 'balanced') {
-          // Balanced GIF: Quality/Size Optimization
-          // Bayer dithering is much more compressible than error-diffusion (floyd_steinberg)
-          // 224 colors is often indistinguishable from 256 but saves on palette and dithering overhead
-          await ffmpeg.exec([
-            '-i', inputName,
-            '-vf', `fps=${fps},scale=${width}:-1:flags=lanczos,palettegen=stats_mode=diff:max_colors=224`,
-            '-y', paletteName
-          ]);
-          await ffmpeg.exec([
-            '-i', inputName,
-            '-i', paletteName,
-            '-filter_complex', `fps=${fps},scale=${width}:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=1:diff_mode=rectangle`,
-            '-y', outputName
-          ]);
+        // Write file to FFmpeg FS
+        await ffmpeg.writeFile(inputName, await fetchFile(file));
+
+        if (outputType === 'gif') {
+          if (quality === 'high') {
+            await ffmpeg.exec([
+              '-i', inputName,
+              '-vf', `fps=${fps},scale=${width}:-1:flags=lanczos,palettegen=stats_mode=full`,
+              '-y', paletteName
+            ]);
+            await ffmpeg.exec([
+              '-i', inputName,
+              '-i', paletteName,
+              '-filter_complex', `fps=${fps},scale=${width}:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle`,
+              '-y', outputName
+            ]);
+          } else if (quality === 'balanced') {
+            await ffmpeg.exec([
+              '-i', inputName,
+              '-vf', `fps=${fps},scale=${width}:-1:flags=lanczos,palettegen=stats_mode=diff:max_colors=224`,
+              '-y', paletteName
+            ]);
+            await ffmpeg.exec([
+              '-i', inputName,
+              '-i', paletteName,
+              '-filter_complex', `fps=${fps},scale=${width}:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=1:diff_mode=rectangle`,
+              '-y', outputName
+            ]);
+          } else {
+            await ffmpeg.exec([
+              '-i', inputName,
+              '-vf', `fps=${fps},scale=${width}:-1:flags=lanczos`,
+              '-y', outputName
+            ]);
+          }
         } else {
+          const q = quality === 'high' ? '95' : quality === 'balanced' ? '75' : '50';
+          const method = quality === 'high' ? '6' : quality === 'balanced' ? '4' : '2'; 
+          
           await ffmpeg.exec([
             '-i', inputName,
-            '-vf', `fps=${fps},scale=${width}:-1:flags=lanczos`,
+            '-vcodec', 'libwebp',
+            '-filter_complex', `fps=${fps},scale=${width}:-1:flags=lanczos`,
+            '-lossless', '0',
+            '-q:v', q,
+            '-compression_level', method,
+            '-preset', 'drawing',
+            '-loop', '0',
             '-y', outputName
           ]);
         }
-      } else {
-        // WebP Conversion
-        // High: Ultra High Quality (q:v 95, compression_level 6)
-        // Balanced: Standard High Quality (q:v 75, compression_level 4)
-        // Fast: Efficient Quality (q:v 50, compression_level 2)
-        const q = quality === 'high' ? '95' : quality === 'balanced' ? '75' : '50';
-        const method = quality === 'high' ? '6' : quality === 'balanced' ? '4' : '2'; 
-        
-        await ffmpeg.exec([
-          '-i', inputName,
-          '-vcodec', 'libwebp',
-          '-filter_complex', `fps=${fps},scale=${width}:-1:flags=lanczos`,
-          '-lossless', '0',
-          '-q:v', q,
-          '-compression_level', method,
-          '-preset', 'drawing', // Good for many use cases, but libwebp handles it well
-          '-loop', '0',
-          '-y', outputName
-        ]);
-      }
 
-      // Read result
-      const data = await ffmpeg.readFile(outputName);
-      if (typeof data !== 'string') {
-        const uint8 = new Uint8Array(data);
-        const mime = outputType === 'gif' ? 'image/gif' : 'image/webp';
-        const blob = new Blob([uint8], { type: mime });
-        const url = URL.createObjectURL(blob);
-        setResultUrl(url);
+        const data = await ffmpeg.readFile(outputName);
+        if (typeof data !== 'string') {
+          const uint8 = new Uint8Array(data);
+          const mime = outputType === 'gif' ? 'image/gif' : 'image/webp';
+          const blob = new Blob([uint8], { type: mime });
+          const url = URL.createObjectURL(blob);
+          setResults(prev => [...prev, { url, name: finalFileName, type: outputType }]);
+        }
+
+        // Cleanup virtual files to save memory
+        try {
+          await ffmpeg.deleteFile(inputName);
+          await ffmpeg.deleteFile(outputName);
+          if (outputType === 'gif') await ffmpeg.deleteFile(paletteName);
+        } catch (e) {
+          console.warn('Cleanup failed', e);
+        }
       }
     } catch (err) {
       console.error(err);
-      setError('Conversion failed. Please try a different file.');
+      setError('An error occurred during batch processing.');
     } finally {
       setIsConverting(false);
+      setCurrentProcessingIndex(null);
     }
   };
 
@@ -157,7 +176,7 @@ function App() {
             MP4 to Animation
           </h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '1.2rem', fontWeight: 400 }}>
-            High-definition GIF and WebP conversion in your browser.
+            High-definition Batch GIF and WebP conversion in your browser.
           </p>
         </motion.div>
       </header>
@@ -165,10 +184,10 @@ function App() {
       <main>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '32px', alignItems: 'start' }}>
           
-          {/* Left Column: Visual Area */}
+          {/* Left Column: Visual Area & List */}
           <section>
             <AnimatePresence mode="wait">
-              {!videoFile ? (
+              {videoFiles.length === 0 ? (
                 <motion.div 
                   key="dropzone"
                   initial={{ opacity: 0, scale: 0.95 }}
@@ -188,81 +207,124 @@ function App() {
                 >
                   <input 
                     type="file" 
+                    multiple
                     accept="video/mp4,video/x-m4v,video/*" 
                     onChange={handleFileChange} 
                     style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
                   />
                   <div style={{ padding: '24px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', marginBottom: '20px' }}>
-                    <FileVideo size={48} color="var(--text-muted)" />
+                    <Files size={48} color="var(--text-muted)" />
                   </div>
-                  <h3>Drop your MP4 here</h3>
-                  <p style={{ color: 'var(--text-muted)', marginTop: '8px' }}>or click to browse files</p>
+                  <h3>Drop your MP4s here</h3>
+                  <p style={{ color: 'var(--text-muted)', marginTop: '8px' }}>or click to select multiple files</p>
                 </motion.div>
               ) : (
                 <motion.div 
-                  key="preview"
+                  key="batch-view"
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   className="glass-card"
-                  style={{ padding: '20px', position: 'relative' }}
+                  style={{ padding: '32px', minHeight: '400px' }}
                 >
-                  {resultUrl ? (
-                    <div style={{ textAlign: 'center' }}>
-                      <img src={resultUrl} alt="Result" style={{ maxWidth: '100%', borderRadius: '12px', boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }} />
-                      <div style={{ marginTop: '24px', display: 'flex', gap: '16px', justifyContent: 'center' }}>
-                        <a href={resultUrl} download={outputFileName} className="btn-primary">
-                          <Download size={20} /> Download {outputType.toUpperCase()}
-                        </a>
-                        <button onClick={() => setVideoFile(null)} className="btn-primary" style={{ background: 'rgba(255,255,255,0.1)', boxShadow: 'none' }}>
-                          Start Over
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <video 
-                        ref={videoRef}
-                        src={URL.createObjectURL(videoFile)} 
-                        controls 
-                        style={{ width: '100%', borderRadius: '12px' }} 
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                    <h3 style={{ fontSize: '1.4rem' }}>Batch Queue ({videoFiles.length} files)</h3>
+                    <button 
+                      onClick={clearAll} 
+                      disabled={isConverting}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem' }}
+                    >
+                      <Trash2 size={16} /> Clear All
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', paddingRight: '8px' }}>
+                    {videoFiles.map((file, idx) => {
+                      const result = results.find(r => r.name.includes(file.name.replace(/\.[^/.]+$/, "")));
+                      const isProcessing = currentProcessingIndex === idx;
+                      
+                      return (
+                        <motion.div 
+                          layout
+                          key={`${file.name}-${idx}`}
+                          style={{ 
+                            padding: '16px', 
+                            background: isProcessing ? 'rgba(99, 102, 241, 0.1)' : 'rgba(255,255,255,0.03)', 
+                            borderRadius: '12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            border: isProcessing ? '1px solid var(--primary)' : '1px solid transparent'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', overflow: 'hidden' }}>
+                            <div style={{ position: 'relative' }}>
+                               <FileVideo size={24} color={result ? "var(--accent)" : isProcessing ? "var(--primary)" : "var(--text-muted)"} />
+                               {result && <div style={{ position: 'absolute', top: -4, right: -4, background: 'var(--accent)', color: 'black', borderRadius: '50%', padding: '2px' }}><CheckCircle2 size={10} /></div>}
+                            </div>
+                            <div style={{ overflow: 'hidden' }}>
+                              <p style={{ fontSize: '0.95rem', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{file.name}</p>
+                              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{(file.size / 1024 / 1024).toFixed(1)} MB</p>
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            {result ? (
+                              <a href={result.url} download={result.name} className="btn-primary" style={{ padding: '8px 12px', fontSize: '0.8rem', height: 'auto', background: 'var(--accent)', color: 'black' }}>
+                                <Download size={14} /> Download
+                              </a>
+                            ) : isProcessing ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--primary)', fontSize: '0.85rem' }}>
+                                <Loader2 size={16} className="animate-spin" />
+                                {progress}%
+                              </div>
+                            ) : (
+                              <button 
+                                onClick={() => removeFile(idx)} 
+                                disabled={isConverting}
+                                style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}
+                              >
+                                <X size={18} />
+                              </button>
+                            )}
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+
+                  {!isConverting && results.length === 0 && (
+                    <div style={{ marginTop: '32px', padding: '24px', border: '2px dashed var(--border)', borderRadius: '16px', textAlign: 'center', position: 'relative' }}>
+                      <input 
+                        type="file" 
+                        multiple
+                        accept="video/mp4,video/x-m4v,video/*" 
+                        onChange={handleFileChange} 
+                        style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
                       />
-                      <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                           <FileVideo size={16} color="var(--primary)" />
-                           <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>{videoFile.name} ({(videoFile.size / 1024 / 1024).toFixed(1)} MB)</span>
-                         </div>
-                         <button onClick={() => setVideoFile(null)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '0.9rem' }}>
-                           Remove
-                         </button>
-                      </div>
-                    </>
+                      <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>+ Add more files to batch</p>
+                    </div>
+                  )}
+                  
+                  {isConverting && (
+                     <div style={{ marginTop: '32px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', marginBottom: '8px' }}>
+                           <span>Batch Progress</span>
+                           <span>{Math.round(((currentProcessingIndex || 0) / videoFiles.length) * 100)}%</span>
+                        </div>
+                        <div style={{ width: '100%', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+                           <motion.div 
+                              style={{ height: '100%', background: 'var(--gradient-primary)' }}
+                              animate={{ width: `${((currentProcessingIndex || 0) / videoFiles.length) * 100}%` }}
+                           />
+                        </div>
+                     </div>
                   )}
 
-                  {isConverting && (
-                    <div style={{ 
-                      position: 'absolute', 
-                      inset: 0, 
-                      background: 'rgba(0,0,0,0.7)', 
-                      borderRadius: '20px', 
-                      display: 'flex', 
-                      flexDirection: 'column', 
-                      alignItems: 'center', 
-                      justifyContent: 'center',
-                      backdropFilter: 'blur(4px)'
-                    }}>
-                      <div style={{ width: '200px', height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden', marginBottom: '20px' }}>
-                        <motion.div 
-                          style={{ height: '100%', background: 'var(--gradient-primary)' }} 
-                          animate={{ width: `${progress}%` }}
-                        />
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <Loader2 className="animate-spin" size={24} color="var(--primary)" />
-                        <h3 style={{ fontWeight: 500 }}>Brewing HD GIF... {progress}%</h3>
-                      </div>
-                      <p style={{ marginTop: '12px', fontSize: '0.8rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                        {logs[logs.length - 1]}
-                      </p>
+                  {results.length > 0 && !isConverting && (
+                    <div style={{ marginTop: '32px', display: 'flex', gap: '16px' }}>
+                       <button onClick={clearAll} className="btn-primary" style={{ flex: 1, background: 'rgba(255,255,255,0.1)', boxShadow: 'none' }}>
+                         Start New Batch
+                       </button>
                     </div>
                   )}
                 </motion.div>
@@ -409,16 +471,16 @@ function App() {
 
                   <div style={{ marginTop: '12px' }}>
                     <button 
-                      onClick={convertToOutput} 
-                      disabled={!videoFile || isConverting}
+                      onClick={convertBatch} 
+                      disabled={videoFiles.length === 0 || isConverting}
                       className="btn-primary"
                       style={{ width: '100%', justifyContent: 'center', height: '50px' }}
                     >
                       {isConverting ? (
-                        <>Processing...</>
+                        <>Processing Batch...</>
                       ) : (
                         <>
-                          <Play size={20} fill="currentColor" /> Convert Now
+                          <Play size={20} fill="currentColor" /> Convert {videoFiles.length > 1 ? `Batch (${videoFiles.length})` : 'Now'}
                         </>
                       )}
                     </button>
@@ -428,7 +490,7 @@ function App() {
             </div>
 
             {/* Status / Log Mini panel */}
-            {videoFile && !isConverting && !resultUrl && (
+            {videoFiles.length > 0 && !isConverting && results.length === 0 && (
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -436,7 +498,7 @@ function App() {
               >
                 <CheckCircle2 color="var(--accent)" size={20} style={{ flexShrink: 0 }} />
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                  Video loaded and ready for conversion. High precision mode will preserve maximum color range.
+                  Batch ready. Shared settings will accelerate your workflow. HD precision mode is active for all files.
                 </p>
               </motion.div>
             )}
@@ -476,6 +538,19 @@ function App() {
           outline: none;
           border-color: var(--primary) !important;
           box-shadow: 0 0 0 2px var(--primary-glow);
+        }
+        ::-webkit-scrollbar {
+          width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+          background: rgba(255,255,255,0.02);
+        }
+        ::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,0.1);
+          border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+          background: rgba(255,255,255,0.2);
         }
       `}</style>
     </div>
